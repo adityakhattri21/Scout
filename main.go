@@ -6,6 +6,8 @@ import (
 	"log"
 	"os"
 	"os/signal"
+	"path/filepath"
+	"sync"
 	"syscall"
 
 	"github.com/adityakhattri21/scout/models"
@@ -55,7 +57,9 @@ func loadConfig(config *models.Config) (string, error) {
 	return "", nil
 }
 
-func watchFileChange(_ context.Context, config models.Config) {
+func watchFileChange(ctx context.Context, config models.Config, wg *sync.WaitGroup) {
+	defer wg.Done()
+
 	watcher, err := fsnotify.NewWatcher()
 	if err != nil {
 		log.Fatalf("Error creating watcher: %s", err)
@@ -63,18 +67,25 @@ func watchFileChange(_ context.Context, config models.Config) {
 	defer watcher.Close()
 
 	// Add the work directory to the watcher
+	err = watcher.Add(config.Work_dir)
 
+	if err != nil {
+		log.Fatalf("Error adding work directory to watcher: %s", err)
+		return
+	}
+	log.Printf("Watching directory: %s", config.Work_dir)
 	entries, _ := os.ReadDir(config.Work_dir)
 
 	for _, entry := range entries {
-		fmt.Println(entry)
+		if entry.IsDir() {
+			err = watcher.Add(entry.Name())
+			if err != nil {
+				log.Fatalf("Error adding sub directory %s to watcher: %s", entry.Name(), err)
+				return
+			}
+			log.Printf("Watching sub directory: %s", entry.Name())
+		}
 	}
-	err = watcher.Add(config.Work_dir)
-	if err != nil {
-		log.Fatalf("Error adding directory to watcher: %s", err)
-	}
-
-	log.Printf("Watching directory: %s", config.Work_dir)
 
 	for {
 		select {
@@ -82,51 +93,28 @@ func watchFileChange(_ context.Context, config models.Config) {
 			if !ok {
 				return
 			}
-			log.Println("event:", event)
 			if event.Has(fsnotify.Write) {
-				log.Println("modified file:", event.Name)
+				inc_matched, _ := filepath.Match(config.File_Patterns, filepath.Base(event.Name))
+				exc_matched, _ := filepath.Match(config.Exclude_Patterns, filepath.Base(event.Name))
+				if inc_matched && !exc_matched {
+					log.Println("Modified file:", event.Name, inc_matched)
+				}
 			}
 		case err, ok := <-watcher.Errors:
 			if !ok {
 				return
 			}
 			log.Println("error:", err)
+		case <-ctx.Done():
+			log.Println("Stopping file watcher...")
+			return
 		}
 	}
-
-	// // Start watching for events
-	// go func() {
-	// 	for {
-	// 		select {
-	// 		case event, ok := <-watcher.Events:
-	// 			if !ok {
-	// 				return
-	// 			}
-
-	// 			// Match file patterns
-	// 			for _, pattern := range config.File_patterns {
-	// 				matched, _ := filepath.Match(pattern, filepath.Base(event.Name))
-	// 				if matched {
-	// 					log.Printf("File change detected: %s, Event: %s", event.Name, event.Op)
-	// 					// Handle the detected event (e.g., reload or trigger actions)
-	// 				}
-	// 			}
-
-	// 		case err, ok := <-watcher.Errors:
-	// 			if !ok {
-	// 				return
-	// 			}
-	// 			log.Printf("Error watching files: %s", err)
-
-	// 		case <-ctx.Done():
-	// 			log.Println("Stopping file watcher...")
-	// 			return
-	// 		}
-	// 	}
-	// }()
 }
 
 func main() {
+	var wg sync.WaitGroup
+
 	args, argsErr := GetArgs()
 	if argsErr != nil {
 		return
@@ -140,13 +128,15 @@ func main() {
 	}
 
 	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
 
 	signalChan := make(chan os.Signal, 1)
 	signal.Notify(signalChan, os.Interrupt, syscall.SIGTERM)
 
-	go watchFileChange(ctx, args)
+	wg.Add(1)
+	go watchFileChange(ctx, args, &wg)
 
 	<-signalChan
 	log.Println("Received shutdown signal. Exiting...")
+	cancel()
+	wg.Wait()
 }
