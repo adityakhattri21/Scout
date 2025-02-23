@@ -6,4 +6,5 @@ type Config struct {
 	File_Patterns    string `yaml:"file_patterns"`
 	Exclude_Patterns string `yaml:"exclude_patterns"`
 	Start_Command    string `yaml:"start_command"`
+	Port             string `yaml:"port"`
 }

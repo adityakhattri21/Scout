@@ -1,0 +1,5 @@
+work_dir: /home/user/scout
+file_patterns: "*.go"
+exclude_patterns: "*.test.go"
+start_command: go run main.go
+port: 9000

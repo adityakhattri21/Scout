@@ -1,235 +1,253 @@
-// package main
-
-// import (
-// 	"context"
-// 	"fmt"
-// 	"log"
-// 	"os"
-// 	"os/exec"
-// 	"os/signal"
-// 	"path/filepath"
-// 	"sync"
-// 	"syscall"
-// 	"time"
-
-// 	"github.com/adityakhattri21/scout/models"
-// 	"github.com/akamensky/argparse"
-// 	"github.com/fsnotify/fsnotify"
-// 	"gopkg.in/yaml.v3"
-// )
-
-// func GetArgs() (models.Config, error) {
-
-// 	parser := argparse.NewParser("Scout", "A Hot Reloader in Go for Go ;)")
-
-// 	cwd, err := os.Getwd()
-// 	if err != nil {
-// 		return models.Config{}, err
-// 	}
-
-// 	configFile := parser.File("c", "config", os.O_RDONLY, 0644, &argparse.Options{
-// 		Help:     "Path to the configuration file",
-// 		Default:  cwd + "/scout_config.yaml",
-// 		Required: false,
-// 	})
-
-// 	err = parser.Parse(os.Args)
-// 	if err != nil {
-// 		fmt.Printf("Error occurred: %s\n", err)
-// 		return models.Config{}, err
-// 	}
-
-// 	config := models.Config{File_Location: configFile.Name()}
-
-// 	return config, nil
-// }
-
-// func loadConfig(config *models.Config) (string, error) {
-// 	data, err := os.ReadFile(config.File_Location)
-
-// 	if err != nil {
-// 		return "", err
-// 	}
-
-// 	err = yaml.Unmarshal(data, config)
-
-// 	if err != nil {
-// 		return "", err
-// 	}
-// 	return "", nil
-// }
-
-// func clearTerminal() {
-// 	fmt.Print("\033[H\033[2J")
-// }
-
-// func killProcess(proc *os.Process) error {
-// 	if proc == nil {
-// 		return nil
-// 	}
-
-// 	// Check if process is still alive
-// 	if err := proc.Signal(syscall.Signal(0)); err != nil {
-// 		log.Println("Process already finished. Skipping termination.")
-// 		return nil
-// 	}
-
-// 	log.Println("Killing existing process...")
-// 	err := proc.Kill()
-// 	if err != nil {
-// 		log.Printf("Error killing process: %v", err)
-// 		return err
-// 	}
-// 	proc.Release()
-// 	time.Sleep(2 * time.Second) // Wait for port to be released
-// 	return nil
-// }
-
-// func startProcess(ctx context.Context, config models.Config, wg *sync.WaitGroup, processChan chan *os.Process) {
-// 	defer wg.Done()
-// 	clearTerminal()
-// 	time.Sleep(2 * time.Second)
-// 	cmd := exec.CommandContext(ctx, "sh", "-c", config.Start_Command)
-// 	cmd.Stdout = os.Stdout
-// 	cmd.Stderr = os.Stderr
-
-// 	if err := cmd.Start(); err != nil {
-// 		log.Printf("Failed to start command: %v", err)
-// 		return
-// 	}
-
-// 	// Add the process to the channel
-// 	processChan <- cmd.Process
-
-// 	// Wait for the command to complete
-// 	if err := cmd.Wait(); err != nil {
-// 		log.Printf("Command exited with signal: %v", err)
-// 	}
-
-// 	log.Println("Command execution finished")
-// }
-
-// func watchFileChange(ctx context.Context, config models.Config, wg *sync.WaitGroup, processChan chan *os.Process) {
-// 	defer wg.Done()
-
-// 	watcher, err := fsnotify.NewWatcher()
-// 	if err != nil {
-// 		log.Fatalf("Error creating watcher: %s", err)
-// 	}
-// 	defer watcher.Close()
-
-// 	// Add the work directory to the watcher
-// 	err = watcher.Add(config.Work_dir)
-
-// 	if err != nil {
-// 		log.Fatalf("Error adding work directory to watcher: %s", err)
-// 		return
-// 	}
-// 	log.Printf("Watching directory: %s", config.Work_dir)
-// 	entries, _ := os.ReadDir(config.Work_dir)
-
-// 	for _, entry := range entries {
-// 		if entry.IsDir() {
-// 			err = watcher.Add(entry.Name())
-// 			if err != nil {
-// 				log.Fatalf("Error adding sub directory %s to watcher: %s", entry.Name(), err)
-// 				return
-// 			}
-// 			log.Printf("Watching sub directory: %s", entry.Name())
-// 		}
-// 	}
-
-// 	for {
-// 		select {
-// 		case event, ok := <-watcher.Events:
-// 			if !ok {
-// 				return
-// 			}
-// 			if event.Has(fsnotify.Write) {
-// 				inc_matched, _ := filepath.Match(config.File_Patterns, filepath.Base(event.Name))
-// 				exc_matched, _ := filepath.Match(config.Exclude_Patterns, filepath.Base(event.Name))
-// 				if inc_matched && !exc_matched {
-// 					log.Println("Modified file:", event.Name)
-// 					if proc := <-processChan; proc != nil {
-// 						log.Println("Killing existing process...")
-// 						if err := killProcess(proc); err != nil {
-// 							log.Println("Error during process termination:", err)
-// 							return
-// 						}
-// 					}
-// 					wg.Add(1)
-// 					go startProcess(ctx, config, wg, processChan)
-// 				}
-// 			}
-// 		case err, ok := <-watcher.Errors:
-// 			if !ok {
-// 				return
-// 			}
-// 			log.Println("error:", err)
-// 		case <-ctx.Done():
-// 			log.Println("Stopping file watcher...")
-// 			return
-// 		}
-// 	}
-// }
-
-// func main() {
-// 	var wg sync.WaitGroup
-
-// 	args, argsErr := GetArgs()
-// 	if argsErr != nil {
-// 		return
-// 	}
-
-// 	_, err := loadConfig(&args)
-
-// 	if err != nil {
-// 		fmt.Printf("Error occured: %s/n", err.Error())
-// 		return
-// 	}
-
-// 	ctx, cancel := context.WithCancel(context.Background())
-
-// 	signalChan := make(chan os.Signal, 1)
-// 	signal.Notify(signalChan, os.Interrupt, syscall.SIGTERM)
-
-// 	processChan := make(chan *os.Process, 1)
-
-// 	wg.Add(1)
-// 	go watchFileChange(ctx, args, &wg, processChan)
-
-// 	wg.Add(1)
-// 	go startProcess(ctx, args, &wg, processChan)
-
-// 	<-signalChan
-// 	log.Println("Received shutdown signal. Exiting...")
-
-// 	cancel()
-// 	wg.Wait()
-// }
-
 package main
 
 import (
+	"context"
 	"fmt"
-	"net/http"
+	"log"
+	"net"
+	"os"
+	"os/exec"
+	"os/signal"
+	"path/filepath"
+	"strconv"
+	"syscall"
+	"time"
+
+	"github.com/adityakhattri21/scout/models"
+	"github.com/akamensky/argparse"
+	"github.com/fsnotify/fsnotify"
+	"gopkg.in/yaml.v3"
 )
 
-func main() {
-	// Define a handler for the "/" route
-
-	http.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
-		fmt.Fprintf(w, "Hello, World! This is a test route.")
-	})
-
-	http.HandleFunc("/greet", func(w http.ResponseWriter, r *http.Request) {
-		fmt.Fprintf(w, "Hello, World! This is a greets route.")
-	})
-
-	// Start the server on port 8080
-	if err := http.ListenAndServe(":8080", nil); err != nil {
-		fmt.Printf("Error starting server: %s\n", err)
-		return
+func GetArgs() (models.Config, error) {
+	parser := argparse.NewParser("Scout", "A Hot Reloader in Go for Go ;)")
+	cwd, err := os.Getwd()
+	if err != nil {
+		return models.Config{}, err
 	}
-	fmt.Println("Server is running on http://localhost:8080")
+
+	configFile := parser.File("c", "config", os.O_RDONLY, 0644, &argparse.Options{
+		Help:     "Path to the configuration file",
+		Default:  cwd + "/scout_config.yaml",
+		Required: false,
+	})
+
+	err = parser.Parse(os.Args)
+	if err != nil {
+		return models.Config{}, fmt.Errorf("error parsing args: %v", err)
+	}
+
+	return models.Config{File_Location: configFile.Name()}, nil
+}
+
+func loadConfig(config *models.Config) error {
+	data, err := os.ReadFile(config.File_Location)
+	if err != nil {
+		return fmt.Errorf("error reading config: %v", err)
+	}
+
+	if err := yaml.Unmarshal(data, config); err != nil {
+		return fmt.Errorf("error parsing config: %v", err)
+	}
+
+	fmt.Printf("Scout initialized with config from: %s\n", config.File_Location)
+	return nil
+}
+
+func killProcess(proc *os.Process, config models.Config) error {
+	if proc == nil {
+		return nil
+	}
+
+	// Get the process group ID
+	pgid, err := syscall.Getpgid(proc.Pid)
+	if err != nil {
+		log.Printf("Error getting process group ID: %v", err)
+		// Fall back to killing just the main process if we can't get the group
+		return killSingleProcess(proc)
+	}
+
+	// Kill the entire process group
+	if err := syscall.Kill(-pgid, syscall.SIGTERM); err != nil {
+		log.Printf("Error sending SIGTERM to process group: %v", err)
+		// Try SIGKILL if SIGTERM fails
+		if err := syscall.Kill(-pgid, syscall.SIGKILL); err != nil {
+			log.Printf("Error sending SIGKILL to process group: %v", err)
+			return err
+		}
+	}
+
+	// Wait for the main process to exit
+	_, err = proc.Wait()
+	if err != nil {
+		log.Printf("Error waiting for process to terminate: %v", err)
+	}
+
+	// Additional cleanup: check if port is still in use
+	timeout := time.After(2 * time.Second)
+	ticker := time.NewTicker(100 * time.Millisecond)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-timeout:
+			return fmt.Errorf("timeout waiting for port to be released")
+		case <-ticker.C:
+			port_int, _ := strconv.Atoi((config.Port)) //Ignoring err for now
+			if !isPortInUse(port_int) {                // You might want to make this port configurable
+				return nil
+			}
+		}
+	}
+}
+
+func killSingleProcess(proc *os.Process) error {
+	if err := proc.Signal(syscall.SIGTERM); err != nil {
+		log.Printf("Error sending SIGTERM: %v", err)
+		if err := proc.Kill(); err != nil {
+			log.Printf("Error sending SIGKILL: %v", err)
+			return err
+		}
+	}
+	_, err := proc.Wait()
+	return err
+}
+
+func isPortInUse(port int) bool {
+	addr := fmt.Sprintf(":%d", port)
+	listener, err := net.Listen("tcp", addr)
+	if err != nil {
+		return true
+	}
+	listener.Close()
+	return false
+}
+
+func startProcess(config models.Config) (*os.Process, error) {
+	cmd := exec.Command("sh", "-c", config.Start_Command)
+
+	// Create a new process group
+	cmd.SysProcAttr = &syscall.SysProcAttr{
+		Setpgid: true,
+	}
+
+	cmd.Stdout = os.Stdout
+	cmd.Stderr = os.Stderr
+
+	maxRetries := 3
+	var lastErr error
+
+	for i := 0; i < maxRetries; i++ {
+		// Ensure port is free before starting
+		if isPortInUse(8080) { // Make port configurable
+			time.Sleep(500 * time.Millisecond)
+			continue
+		}
+
+		if err := cmd.Start(); err != nil {
+			lastErr = fmt.Errorf("failed to start command (attempt %d/%d): %v", i+1, maxRetries, err)
+			time.Sleep(500 * time.Millisecond)
+			continue
+		}
+
+		log.Printf("Started process with PID: %d", cmd.Process.Pid)
+		return cmd.Process, nil
+	}
+
+	return nil, lastErr
+}
+
+func watchFileChange(ctx context.Context, config models.Config, processChan chan *os.Process) {
+	watcher, err := fsnotify.NewWatcher()
+	if err != nil {
+		log.Fatalf("Error creating watcher: %v", err)
+	}
+	defer watcher.Close()
+
+	if err := watcher.Add(config.Work_dir); err != nil {
+		log.Fatalf("Error watching directory: %v", err)
+	}
+
+	entries, _ := os.ReadDir(config.Work_dir)
+	for _, entry := range entries {
+		if entry.IsDir() {
+			dirPath := filepath.Join(config.Work_dir, entry.Name())
+			_ = watcher.Add(dirPath)
+		}
+	}
+
+	// Debounce map
+	modifiedFiles := make(map[string]time.Time)
+	interval := 2 * time.Second
+
+	fmt.Println("Scout is watching for changes...")
+
+	for {
+		select {
+		case event := <-watcher.Events:
+			if event.Has(fsnotify.Write) {
+				incMatched, _ := filepath.Match(config.File_Patterns, filepath.Base(event.Name))
+				excMatched, _ := filepath.Match(config.Exclude_Patterns, filepath.Base(event.Name))
+
+				if incMatched && !excMatched {
+					now := time.Now()
+					if lastModTime, exists := modifiedFiles[event.Name]; exists && now.Sub(lastModTime) < interval {
+						continue
+					}
+
+					modifiedFiles[event.Name] = now
+					fmt.Printf("\nRestarting due to changes in: %s\n", filepath.Base(event.Name))
+
+					if proc := <-processChan; proc != nil {
+						if err := killProcess(proc, config); err != nil {
+							log.Printf("Error stopping process: %v", err)
+						}
+					}
+
+					newProc, err := startProcess(config)
+					if err != nil {
+						log.Printf("Error starting process: %v", err)
+					} else {
+						processChan <- newProc
+					}
+				}
+			}
+		case <-ctx.Done():
+			return
+		}
+	}
+}
+
+func main() {
+	args, err := GetArgs()
+	if err != nil {
+		log.Fatalf("Initialization error: %v", err)
+	}
+
+	if err := loadConfig(&args); err != nil {
+		log.Fatalf("Configuration error: %v", err)
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	signalChan := make(chan os.Signal, 1)
+	signal.Notify(signalChan, os.Interrupt, syscall.SIGTERM)
+
+	processChan := make(chan *os.Process, 1)
+
+	go watchFileChange(ctx, args, processChan)
+
+	initialProc, err := startProcess(args)
+	if err != nil {
+		log.Fatalf("Failed to start process: %v", err)
+	}
+	processChan <- initialProc
+
+	<-signalChan
+	fmt.Println("\nShutting down...")
+
+	if proc := <-processChan; proc != nil {
+		_ = killProcess(proc, args)
+	}
 }
